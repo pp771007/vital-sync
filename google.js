@@ -32,12 +32,6 @@ const TOKEN_ERROR_MESSAGES = {
 };
 const DEFAULT_TOKEN_ERROR = '授權沒有完成，請再按一次';
 
-const STATUS_VIEW = {
-  none: { cls: 'chip-none', text: () => '未授權' },
-  granted: { cls: 'chip-granted', text: () => '✓ 有效至 ' + formatTime(tokenUsableUntil()) },
-  expired: { cls: 'chip-expired', text: () => '已過期' },
-};
-
 // 存在瀏覽器：顯示用的帳號資料、最長一小時就失效的 access token、上次找到的試算表，重新整理才不必再登入一次
 const SESSION_KEY = 'vital-sync:session';
 // 剩不到一分鐘的權杖，拿來用可能在請求途中就過期，當作已過期
@@ -48,7 +42,6 @@ const $ = (id) => document.getElementById(id);
 // 因為 Google 照樣接受寫進垃圾桶裡的試算表，不確認的話資料會寫進使用者已經丟掉的檔案
 const state = { user: null, token: null, tokenExpiresAt: 0, spreadsheet: null, spreadsheetStatus: 'idle', spreadsheetVerified: false };
 let tokenClient = null;
-let expiryTimer = null;
 let tokenRequest = null;
 let pendingToken = null;
 let pendingSpreadsheet = null;
@@ -87,7 +80,6 @@ function restoreSession() {
   state.token = saved.token ?? null;
   state.tokenExpiresAt = saved.tokenExpiresAt ?? 0;
   if (tokenStatus() !== 'granted') return;
-  scheduleExpiry();
   // 權杖還有效就先在背景確認；過期的話等第一次按按鈕時再確認（見 prepare）
   ensureSpreadsheet().catch(() => {});
 }
@@ -96,10 +88,6 @@ function tokenUsableUntil() {
   return state.tokenExpiresAt - TOKEN_EXPIRY_MARGIN_MS;
 }
 
-function scheduleExpiry() {
-  clearTimeout(expiryTimer);
-  expiryTimer = setTimeout(render, tokenUsableUntil() - Date.now());
-}
 
 function onGisFailed() {
   showError('Google 登入元件載入失敗，請檢查網路後重新整理');
@@ -160,7 +148,6 @@ function onTokenResponse(response) {
   }
   state.token = response.access_token;
   state.tokenExpiresAt = Date.now() + Number(response.expires_in) * 1000;
-  scheduleExpiry();
   saveSession();
   render();
   tokenRequest?.resolve();
@@ -427,7 +414,6 @@ function spreadsheetUrl(key) {
 
 function signOut() {
   google.accounts.id.disableAutoSelect();
-  clearTimeout(expiryTimer);
   state.user = null;
   state.token = null;
   state.tokenExpiresAt = 0;
@@ -445,10 +431,6 @@ function tokenStatus() {
   return Date.now() < tokenUsableUntil() ? 'granted' : 'expired';
 }
 
-function formatTime(ms) {
-  return new Date(ms).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 function render() {
   const signedIn = state.user !== null;
   // 有試算表就顯示輸入畫面，不看權杖：過期的權杖會在按按鈕時才補（見 prepare）
@@ -463,23 +445,16 @@ function render() {
   $('account').hidden = !signedIn;
   if (!signedIn) return;
 
-  $('avatar').src = state.user.picture || '';
-  $('avatar').hidden = !state.user.picture;
+  for (const id of ['avatar', 'account-avatar']) {
+    $(id).src = state.user.picture || '';
+    $(id).hidden = !state.user.picture;
+  }
   $('name').textContent = state.user.name || '';
   $('email').textContent = state.user.email;
 
-  const status = tokenStatus();
-  const view = STATUS_VIEW[status];
-  $('sheets-status').className = 'chip ' + view.cls;
-  $('sheets-status').textContent = view.text();
-  $('authorize').hidden = status === 'granted';
-
-  const sheet = state.spreadsheetStatus;
-  $('spreadsheet-row').hidden = status !== 'granted';
-  $('spreadsheet-loading').hidden = sheet !== 'loading';
-  $('spreadsheet-link').hidden = sheet !== 'ready';
-  $('spreadsheet-retry').hidden = sheet !== 'error';
-  $('spreadsheet-link').href = state.spreadsheet?.url || '';
+  const loading = state.spreadsheetStatus === 'loading';
+  $('authorize').hidden = loading;
+  $('spreadsheet-loading').hidden = !loading;
 }
 
 function showError(message) {
@@ -494,4 +469,3 @@ function clearError() {
 $('authorize').addEventListener('click', authorize);
 $('signout').addEventListener('click', signOut);
 $('bar-signout').addEventListener('click', signOut);
-$('spreadsheet-retry').addEventListener('click', authorize);

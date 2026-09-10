@@ -97,24 +97,10 @@
     #auth .who { display: flex; align-items: center; gap: 12px; }
     #auth .who img { width: 44px; height: 44px; border-radius: 50%; }
     .muted { color: #94a3b8; font-size: 13px; }
-    #auth .row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 14px;
-      border-radius: 14px;
-      background: rgba(15, 23, 42, 0.85);
-      font-size: 14px;
-    }
-    #auth .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor; }
-    #auth .chip-none { color: #94a3b8; }
-    #auth .chip-granted { color: #34d399; }
-    #auth .chip-expired { color: #f59e0b; }
+    #spreadsheet-loading { margin: 0; text-align: center; }
     #auth button { font: inherit; border: 0; border-radius: 14px; padding: 14px; cursor: pointer; }
     #authorize { background: #0284c7; color: #fff; font-weight: 700; }
     #auth #signout { background: none; color: #64748b; padding: 4px; font-size: 13px; }
-    #spreadsheet-link { color: #34d399; text-decoration: none; font-weight: 700; }
-    #auth #spreadsheet-retry { background: none; color: #f59e0b; border: 1px solid currentColor; padding: 3px 10px; font-size: 12px; border-radius: 999px; }
     #error { margin: 0; color: #fca5a5; font-size: 13px; text-align: center; }
   </style>
   <!-- 放在自訂樣式之後：同權重時 Tailwind 的樣式要能蓋過 .glass 這類自訂樣式，跟 CDN 版把樣式插在最後的順序一樣 -->
@@ -135,25 +121,17 @@
           <div id="email" class="muted"></div>
         </div>
       </div>
-      <div class="row">
-        <span>存取權限</span>
-        <span id="sheets-status" class="chip"></span>
-      </div>
       <button id="authorize" type="button">允許存取試算表</button>
-      <div id="spreadsheet-row" class="row" hidden>
-        <span>我的試算表</span>
-        <span id="spreadsheet-loading" class="muted">準備中…</span>
-        <a id="spreadsheet-link" target="_blank" rel="noopener" hidden>開啟 ↗</a>
-        <button id="spreadsheet-retry" type="button" hidden>重試</button>
-      </div>
+      <p id="spreadsheet-loading" class="muted" hidden>準備中…</p>
       <button id="signout" type="button">登出</button>
     </section>
 
     <p id="error" role="alert" hidden></p>
   </main>
 
-  <div id="account-bar" class="max-w-md mx-auto flex justify-end items-center gap-3 text-[11px] text-slate-500 relative z-10" hidden>
-    <span id="account-email"></span>
+  <div id="account-bar" class="max-w-md mx-auto flex justify-end items-center gap-2 text-[11px] text-slate-500 relative z-10" hidden>
+    <img id="account-avatar" class="w-5 h-5 rounded-full" alt="" referrerpolicy="no-referrer" hidden>
+    <span id="account-email" class="mr-1"></span>
     <button id="bar-signout" type="button" class="hover:text-slate-300">登出</button>
   </div>
   <p id="spreadsheet-note" class="max-w-md mx-auto mt-2 text-center text-[12px] text-emerald-400" hidden>已在你的雲端硬碟建立「VITAL-SYNC」試算表</p>
