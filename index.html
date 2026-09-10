@@ -57,6 +57,14 @@
     }
     #authorize { background: #0284c7; color: #fff; font-weight: 700; }
     #signout { background: none; color: #64748b; padding: 4px; font-size: 13px; }
+    #sheets-test { display: flex; flex-direction: column; gap: 12px; }
+    #test-sheets { background: none; color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+    #test-sheets:disabled { opacity: 0.5; cursor: default; }
+    #test-result { font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+    #test-result .ok { color: #34d399; font-weight: 700; }
+    #test-result table { width: 100%; border-collapse: collapse; color: #cbd5e1; }
+    #test-result td { padding: 4px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+    #test-result a { color: #38bdf8; }
     #error { margin: 0; color: #fca5a5; font-size: 13px; text-align: center; }
   </style>
 </head>
@@ -79,6 +87,10 @@
         <span id="sheets-status" class="chip"></span>
       </div>
       <button id="authorize" type="button">允許存取試算表</button>
+      <div id="sheets-test" hidden>
+        <button id="test-sheets" type="button">測試試算表連線</button>
+        <div id="test-result" hidden></div>
+      </div>
       <button id="signout" type="button">登出</button>
     </section>
 
@@ -88,6 +100,11 @@
   <script>
     const CLIENT_ID = '959499500594-srq9p0eqltr58f7th3mpd59h5bb1qvee.apps.googleusercontent.com';
     const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+    const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
+    const TIMEZONE = 'Asia/Taipei';
+    const TEST_SPREADSHEET_TITLE = 'VITAL-SYNC 連線測試';
+    const TEST_SHEET_TITLE = '測試';
+    const TEST_BUTTON_LABEL = '測試試算表連線';
 
     const TOKEN_ERROR_MESSAGES = {
       popup_closed: '授權視窗被關掉了，再按一次「允許存取試算表」',
@@ -161,6 +178,92 @@
       render();
     }
 
+    async function sheetsFetch(path, options = {}) {
+      const response = await fetch(SHEETS_API + path, {
+        ...options,
+        headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' },
+      });
+      if (response.status === 401) {
+        state.token = null;
+        render();
+        throw new Error('授權已失效，再按一次「允許存取試算表」');
+      }
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error('試算表連線失敗（' + response.status + '）：' + (body.error?.message || '未知錯誤'));
+      }
+      return body;
+    }
+
+    // 跟 GAS 版 addRecord 寫進去的格式一樣，試算表才會把它認成日期
+    function formatTimestamp(date) {
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone: TIMEZONE,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          hourCycle: 'h23',
+        }).formatToParts(date).map((p) => [p.type, p.value])
+      );
+      return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+    }
+
+    function sheetRange(cells) {
+      return encodeURIComponent(`'${TEST_SHEET_TITLE}'!${cells}`);
+    }
+
+    async function testSheets() {
+      const button = $('test-sheets');
+      button.disabled = true;
+      button.textContent = '測試中…';
+      clearError();
+      $('test-result').hidden = true;
+      try {
+        const created = await sheetsFetch('', {
+          method: 'POST',
+          body: JSON.stringify({
+            properties: { title: TEST_SPREADSHEET_TITLE },
+            sheets: [{ properties: { title: TEST_SHEET_TITLE } }],
+          }),
+        });
+        await sheetsFetch(`/${created.spreadsheetId}/values/${sheetRange('A1')}:append?valueInputOption=USER_ENTERED`, {
+          method: 'POST',
+          body: JSON.stringify({ values: [['時間', '內容'], [formatTimestamp(new Date()), '連線測試']] }),
+        });
+        const read = await sheetsFetch(`/${created.spreadsheetId}/values/${sheetRange('A:B')}`);
+        showTestResult(created.spreadsheetUrl, read.values || []);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = TEST_BUTTON_LABEL;
+      }
+    }
+
+    function showTestResult(url, rows) {
+      const result = $('test-result');
+      result.replaceChildren();
+
+      const ok = document.createElement('div');
+      ok.className = 'ok';
+      ok.textContent = '✓ 建立、寫入、讀回 ' + rows.length + ' 列';
+
+      const table = document.createElement('table');
+      for (const row of rows) {
+        const tr = table.insertRow();
+        for (const cell of row) tr.insertCell().textContent = cell;
+      }
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = '開啟試算表 ↗';
+
+      result.append(ok, table, link);
+      result.hidden = false;
+    }
+
     function signOut() {
       google.accounts.id.disableAutoSelect();
       clearTimeout(expiryTimer);
@@ -197,6 +300,7 @@
       $('sheets-status').className = 'chip ' + view.cls;
       $('sheets-status').textContent = view.text();
       $('authorize').hidden = status === 'granted';
+      $('sheets-test').hidden = status !== 'granted';
     }
 
     function showError(message) {
@@ -210,6 +314,7 @@
 
     $('authorize').addEventListener('click', requestToken);
     $('signout').addEventListener('click', signOut);
+    $('test-sheets').addEventListener('click', testSheets);
   </script>
   <script src="https://accounts.google.com/gsi/client" async onload="onGisLoaded()" onerror="onGisFailed()"></script>
 </body>
