@@ -1,0 +1,10 @@
+{
+  "name": "vital-sync",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i ./tailwind.input.css -o ./vendor/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.19"
+  }
+}
