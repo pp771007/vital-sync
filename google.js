@@ -34,9 +34,14 @@ const DEFAULT_TOKEN_ERROR = '授權沒有完成，再按一次「允許存取試
 
 const STATUS_VIEW = {
   none: { cls: 'chip-none', text: () => '未授權' },
-  granted: { cls: 'chip-granted', text: () => '✓ 有效至 ' + formatTime(state.tokenExpiresAt) },
+  granted: { cls: 'chip-granted', text: () => '✓ 有效至 ' + formatTime(tokenUsableUntil()) },
   expired: { cls: 'chip-expired', text: () => '已過期' },
 };
+
+// 存在瀏覽器：顯示用的帳號資料，以及最長一小時就失效的 access token，重新整理才不必再登入一次
+const SESSION_KEY = 'vital-sync:session';
+// 剩不到一分鐘的權杖，拿來用可能在請求途中就過期，當作已過期
+const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 const state = { user: null, token: null, tokenExpiresAt: 0, spreadsheet: null, spreadsheetStatus: 'idle' };
@@ -51,7 +56,41 @@ function onGisLoaded() {
     shape: 'pill',
     locale: 'zh-TW',
   });
+  restoreSession();
   render();
+}
+
+// localStorage 在瀏覽器封鎖網站資料時會直接丟例外；存不了就退回每次都要登入，不影響其他功能
+function saveSession() {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ user: state.user, token: state.token, tokenExpiresAt: state.tokenExpiresAt }));
+  } catch {}
+}
+
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+}
+
+function restoreSession() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch {}
+  if (!saved?.user) return;
+  setUser(saved.user);
+  if (!saved.token) return;
+  state.token = saved.token;
+  state.tokenExpiresAt = saved.tokenExpiresAt;
+  if (tokenStatus() !== 'granted') return;
+  scheduleExpiry();
+  ensureSpreadsheet();
+}
+
+function tokenUsableUntil() {
+  return state.tokenExpiresAt - TOKEN_EXPIRY_MARGIN_MS;
+}
+
+function scheduleExpiry() {
+  clearTimeout(expiryTimer);
+  expiryTimer = setTimeout(render, tokenUsableUntil() - Date.now());
 }
 
 function onGisFailed() {
@@ -65,16 +104,21 @@ function decodeJwtPayload(jwt) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function onCredential({ credential }) {
-  const { email, name, picture } = decodeJwtPayload(credential);
-  state.user = { email, name, picture };
+function setUser(user) {
+  state.user = user;
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
     scope: DATA_SCOPE,
-    login_hint: email,
+    login_hint: user.email,
     callback: onTokenResponse,
     error_callback: (err) => showError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR),
   });
+}
+
+function onCredential({ credential }) {
+  const { email, name, picture } = decodeJwtPayload(credential);
+  setUser({ email, name, picture });
+  saveSession();
   clearError();
   render();
 }
@@ -92,8 +136,8 @@ function onTokenResponse(response) {
   }
   state.token = response.access_token;
   state.tokenExpiresAt = Date.now() + Number(response.expires_in) * 1000;
-  clearTimeout(expiryTimer);
-  expiryTimer = setTimeout(render, state.tokenExpiresAt - Date.now());
+  scheduleExpiry();
+  saveSession();
   clearError();
   render();
   if (state.spreadsheetStatus !== 'ready') ensureSpreadsheet();
@@ -106,6 +150,7 @@ async function googleFetch(url, options = {}) {
   });
   if (response.status === 401) {
     state.token = null;
+    saveSession();
     render();
     throw new Error('授權已失效，再按一次「允許存取試算表」');
   }
@@ -341,13 +386,14 @@ function signOut() {
   state.spreadsheet = null;
   state.spreadsheetStatus = 'idle';
   tokenClient = null;
+  clearSession();
   clearError();
   render();
 }
 
 function tokenStatus() {
   if (!state.token) return 'none';
-  return Date.now() < state.tokenExpiresAt ? 'granted' : 'expired';
+  return Date.now() < tokenUsableUntil() ? 'granted' : 'expired';
 }
 
 function formatTime(ms) {
