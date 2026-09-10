@@ -94,6 +94,10 @@ createApp({
       if (toastTimer) clearTimeout(toastTimer);
       toastVisible.value = false;
     }
+    function notifyFailure(err, fallback) {
+      console.error(err);
+      notify(err.isAuth ? '⚠️ ' + err.message : fallback, 'error', 3000);
+    }
 
     // ── Smart jump ──
     function smartJump(e, nextId) {
@@ -177,9 +181,8 @@ createApp({
         bpNoteOpen.value = false;
         notify('✅ 血壓紀錄已儲存', 'info', 2500);
       }).catch((err) => {
-        console.error(err);
         bpLoading.value = false;
-        notify('❌ 上傳失敗，請重試', 'error', 3000);
+        notifyFailure(err, '❌ 上傳失敗，請重試');
       });
     }
 
@@ -199,9 +202,8 @@ createApp({
         weightNoteOpen.value = false;
         notify('✅ 體重紀錄已儲存', 'info', 2500);
       }).catch((err) => {
-        console.error(err);
         weightLoading.value = false;
-        notify('❌ 上傳失敗，請重試', 'error', 3000);
+        notifyFailure(err, '❌ 上傳失敗，請重試');
       });
     }
 
@@ -217,8 +219,7 @@ createApp({
         historyData.value = data;
         modalVisible.value = true;
       }).catch((err) => {
-        console.error(err);
-        notify('❌ 讀取失敗，請重試', 'error', 3000);
+        notifyFailure(err, '❌ 讀取失敗，請重試');
       });
     }
 
@@ -243,9 +244,8 @@ createApp({
             deletingId.value = null;
             notify('🗑️ 刪除成功', 'info', 2500);
           }).catch((err) => {
-            console.error(err);
             deletingId.value = null;
-            notify('❌ 刪除失敗，請重試', 'error', 3000);
+            notifyFailure(err, '❌ 刪除失敗，請重試');
           });
         }
       });

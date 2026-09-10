@@ -27,10 +27,10 @@ const PULSE_FAST = { color: '#ef4444', above: 100 };
 const ALERT_TEXT_COLOR = '#ffffff';
 
 const TOKEN_ERROR_MESSAGES = {
-  popup_closed: '授權視窗被關掉了，再按一次「允許存取試算表」',
-  popup_failed_to_open: '授權視窗被瀏覽器擋下，請允許這個網站開彈出視窗後再試',
+  popup_closed: '授權視窗被關掉了，請再按一次',
+  popup_failed_to_open: '授權視窗被瀏覽器擋下，請允許這個網站開彈出視窗後再按一次',
 };
-const DEFAULT_TOKEN_ERROR = '授權沒有完成，再按一次「允許存取試算表」';
+const DEFAULT_TOKEN_ERROR = '授權沒有完成，請再按一次';
 
 const STATUS_VIEW = {
   none: { cls: 'chip-none', text: () => '未授權' },
@@ -38,15 +38,20 @@ const STATUS_VIEW = {
   expired: { cls: 'chip-expired', text: () => '已過期' },
 };
 
-// 存在瀏覽器：顯示用的帳號資料，以及最長一小時就失效的 access token，重新整理才不必再登入一次
+// 存在瀏覽器：顯示用的帳號資料、最長一小時就失效的 access token、上次找到的試算表，重新整理才不必再登入一次
 const SESSION_KEY = 'vital-sync:session';
 // 剩不到一分鐘的權杖，拿來用可能在請求途中就過期，當作已過期
 const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
-const state = { user: null, token: null, tokenExpiresAt: 0, spreadsheet: null, spreadsheetStatus: 'idle' };
+// spreadsheetVerified：這次開網頁後確認過試算表還在、而且不在垃圾桶。從瀏覽器記住的那份不算數，
+// 因為 Google 照樣接受寫進垃圾桶裡的試算表，不確認的話資料會寫進使用者已經丟掉的檔案
+const state = { user: null, token: null, tokenExpiresAt: 0, spreadsheet: null, spreadsheetStatus: 'idle', spreadsheetVerified: false };
 let tokenClient = null;
 let expiryTimer = null;
+let tokenRequest = null;
+let pendingToken = null;
+let pendingSpreadsheet = null;
 
 function onGisLoaded() {
   google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential });
@@ -63,7 +68,8 @@ function onGisLoaded() {
 // localStorage 在瀏覽器封鎖網站資料時會直接丟例外；存不了就退回每次都要登入，不影響其他功能
 function saveSession() {
   try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ user: state.user, token: state.token, tokenExpiresAt: state.tokenExpiresAt }));
+    const spreadsheet = state.spreadsheet && { ...state.spreadsheet, created: false };
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ user: state.user, token: state.token, tokenExpiresAt: state.tokenExpiresAt, spreadsheet }));
   } catch {}
 }
 
@@ -76,12 +82,14 @@ function restoreSession() {
   try { saved = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch {}
   if (!saved?.user) return;
   setUser(saved.user);
-  if (!saved.token) return;
-  state.token = saved.token;
-  state.tokenExpiresAt = saved.tokenExpiresAt;
+  state.spreadsheet = saved.spreadsheet ?? null;
+  state.spreadsheetStatus = state.spreadsheet ? 'ready' : 'idle';
+  state.token = saved.token ?? null;
+  state.tokenExpiresAt = saved.tokenExpiresAt ?? 0;
   if (tokenStatus() !== 'granted') return;
   scheduleExpiry();
-  ensureSpreadsheet();
+  // 權杖還有效就先在背景確認；過期的話等第一次按按鈕時再確認（見 prepare）
+  ensureSpreadsheet().catch(() => {});
 }
 
 function tokenUsableUntil() {
@@ -111,8 +119,13 @@ function setUser(user) {
     scope: DATA_SCOPE,
     login_hint: user.email,
     callback: onTokenResponse,
-    error_callback: (err) => showError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR),
+    error_callback: (err) => tokenRequest?.reject(authError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR)),
   });
+}
+
+// isAuth：這類錯誤要把原因直接告訴使用者（例如彈窗被擋），其他錯誤只說「失敗，請重試」
+function authError(message) {
+  return Object.assign(new Error(message), { isAuth: true });
 }
 
 function onCredential({ credential }) {
@@ -123,24 +136,45 @@ function onCredential({ credential }) {
   render();
 }
 
-function requestToken() {
-  // prompt 空字串：同意過就不再跳同意畫面，彈窗會自己關掉
-  tokenClient.requestAccessToken({ prompt: '' });
+// 瀏覽器只准「使用者剛點擊的當下」開彈窗，所以這支一定要在按鈕的點擊處理裡、第一個 await 之前被呼叫
+function ensureToken() {
+  if (tokenStatus() === 'granted') return Promise.resolve();
+  if (!pendingToken) {
+    pendingToken = new Promise((resolve, reject) => {
+      tokenRequest = { resolve, reject };
+      // prompt 空字串：同意過就不再跳同意畫面，彈窗會自己關掉
+      tokenClient.requestAccessToken({ prompt: '' });
+    }).finally(() => {
+      pendingToken = null;
+      tokenRequest = null;
+    });
+  }
+  return pendingToken;
 }
 
 function onTokenResponse(response) {
-  if (response.error) return showError(DEFAULT_TOKEN_ERROR);
+  if (response.error) return tokenRequest?.reject(authError(DEFAULT_TOKEN_ERROR));
   // 使用者可以在同意畫面把試算表那格取消勾選，這時拿到的 token 沒有試算表權限
   if (!google.accounts.oauth2.hasGrantedAllScopes(response, DATA_SCOPE)) {
-    return showError('試算表權限沒有勾選，再授權一次並勾選它');
+    return tokenRequest?.reject(authError('試算表權限沒有勾選，請再按一次並勾選它'));
   }
   state.token = response.access_token;
   state.tokenExpiresAt = Date.now() + Number(response.expires_in) * 1000;
   scheduleExpiry();
   saveSession();
-  clearError();
   render();
-  if (state.spreadsheetStatus !== 'ready') ensureSpreadsheet();
+  tokenRequest?.resolve();
+}
+
+function authorize() {
+  clearError();
+  ensureToken().then(ensureSpreadsheet).catch((err) => showError(err.message));
+}
+
+// 所有讀寫試算表的動作都先經過這裡；跟 ensureToken 一樣要在點擊當下、第一個 await 之前呼叫
+async function prepare() {
+  await ensureToken();
+  if (!state.spreadsheetVerified) await ensureSpreadsheet();
 }
 
 async function googleFetch(url, options = {}) {
@@ -152,7 +186,7 @@ async function googleFetch(url, options = {}) {
     state.token = null;
     saveSession();
     render();
-    throw new Error('授權已失效，再按一次「允許存取試算表」');
+    throw authError('授權已失效，請再按一次');
   }
   const body = await response.json();
   if (!response.ok) {
@@ -272,9 +306,15 @@ function toSpreadsheetState(meta, created) {
   return { id: meta.spreadsheetId, url: meta.spreadsheetUrl, sheetIds, created };
 }
 
-async function ensureSpreadsheet() {
-  // 同時跑兩次會各自找不到、各建一份
-  if (state.spreadsheetStatus === 'loading') return;
+// 同時跑兩次會各自找不到、各建一份，所以同一時間只跑一次，其他呼叫者等同一個結果
+function ensureSpreadsheet() {
+  if (!pendingSpreadsheet) {
+    pendingSpreadsheet = loadSpreadsheet().finally(() => { pendingSpreadsheet = null; });
+  }
+  return pendingSpreadsheet;
+}
+
+async function loadSpreadsheet() {
   const user = state.user;
   state.spreadsheetStatus = 'loading';
   clearError();
@@ -282,15 +322,20 @@ async function ensureSpreadsheet() {
   try {
     const found = await findSpreadsheet();
     const spreadsheet = found ? toSpreadsheetState(found, false) : toSpreadsheetState(await createSpreadsheet(), true);
-    if (state.user !== user) return;
+    if (state.user !== user) throw new Error('帳號已切換');
     state.spreadsheet = spreadsheet;
+    state.spreadsheetVerified = true;
     state.spreadsheetStatus = 'ready';
+    saveSession();
+    render();
   } catch (err) {
-    if (state.user !== user) return;
-    state.spreadsheetStatus = 'error';
-    showError(err.message);
+    if (state.user === user) {
+      state.spreadsheetStatus = state.spreadsheet ? 'ready' : 'error';
+      showError(err.message);
+      render();
+    }
+    throw err;
   }
-  render();
 }
 
 function sheetRange(key, cells) {
@@ -315,6 +360,7 @@ async function addRecord(key, data) {
     : { 體重: data.weight };
   const record = { ID: crypto.randomUUID(), 時間: formatTimestamp(new Date()), ...fields, 備註: asPlainText(data.note) };
   const row = SHEETS[key].headers.map((h) => record[h]);
+  await prepare();
   // USER_ENTERED：時間字串才會被試算表認成日期
   await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, 'A1')}:append?valueInputOption=USER_ENTERED`, {
     method: 'POST',
@@ -336,6 +382,7 @@ function formatSerialDateTime(serial) {
 }
 
 async function getHistory(key) {
+  await prepare();
   const { headers } = SHEETS[key];
   const lastColumn = String.fromCharCode('A'.charCodeAt(0) + headers.length - 1);
   const timeIndex = headers.indexOf('時間');
@@ -353,6 +400,7 @@ async function getHistory(key) {
 }
 
 async function deleteRecord(key, id) {
+  await prepare();
   const idColumn = String.fromCharCode('A'.charCodeAt(0) + SHEETS[key].headers.indexOf('ID'));
   const { values = [] } = await googleFetch(
     `${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, `${idColumn}:${idColumn}`)}?valueRenderOption=UNFORMATTED_VALUE`
@@ -385,6 +433,7 @@ function signOut() {
   state.tokenExpiresAt = 0;
   state.spreadsheet = null;
   state.spreadsheetStatus = 'idle';
+  state.spreadsheetVerified = false;
   tokenClient = null;
   clearSession();
   clearError();
@@ -402,7 +451,8 @@ function formatTime(ms) {
 
 function render() {
   const signedIn = state.user !== null;
-  const ready = signedIn && tokenStatus() === 'granted' && state.spreadsheetStatus === 'ready';
+  // 有試算表就顯示輸入畫面，不看權杖：過期的權杖會在按按鈕時才補（見 prepare）
+  const ready = signedIn && state.spreadsheet !== null;
   $('auth').hidden = ready;
   $('app').hidden = !ready;
   $('account-bar').hidden = !ready;
@@ -441,7 +491,7 @@ function clearError() {
   $('error').hidden = true;
 }
 
-$('authorize').addEventListener('click', requestToken);
+$('authorize').addEventListener('click', authorize);
 $('signout').addEventListener('click', signOut);
 $('bar-signout').addEventListener('click', signOut);
-$('spreadsheet-retry').addEventListener('click', ensureSpreadsheet);
+$('spreadsheet-retry').addEventListener('click', authorize);
