@@ -99,8 +99,11 @@
 
   <script>
     const CLIENT_ID = '959499500594-srq9p0eqltr58f7th3mpd59h5bb1qvee.apps.googleusercontent.com';
-    const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+    // drive.file：只碰得到這個網站建立的檔案；Sheets API 也吃這個權限，Drive API 靠它搜尋自己建的試算表
+    const DATA_SCOPE = 'https://www.googleapis.com/auth/drive.file';
     const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
+    const DRIVE_FILES_API = 'https://www.googleapis.com/drive/v3/files';
+    const SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
     const TIMEZONE = 'Asia/Taipei';
     const TEST_SPREADSHEET_TITLE = 'VITAL-SYNC 連線測試';
     const TEST_SHEET_TITLE = '測試';
@@ -150,7 +153,7 @@
       state.user = { email, name, picture };
       tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
-        scope: SHEETS_SCOPE,
+        scope: DATA_SCOPE,
         login_hint: email,
         callback: onTokenResponse,
         error_callback: (err) => showError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR),
@@ -167,7 +170,7 @@
     function onTokenResponse(response) {
       if (response.error) return showError(DEFAULT_TOKEN_ERROR);
       // 使用者可以在同意畫面把試算表那格取消勾選，這時拿到的 token 沒有試算表權限
-      if (!google.accounts.oauth2.hasGrantedAllScopes(response, SHEETS_SCOPE)) {
+      if (!google.accounts.oauth2.hasGrantedAllScopes(response, DATA_SCOPE)) {
         return showError('試算表權限沒有勾選，再授權一次並勾選它');
       }
       state.token = response.access_token;
@@ -178,8 +181,8 @@
       render();
     }
 
-    async function sheetsFetch(path, options = {}) {
-      const response = await fetch(SHEETS_API + path, {
+    async function googleFetch(url, options = {}) {
+      const response = await fetch(url, {
         ...options,
         headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' },
       });
@@ -190,7 +193,7 @@
       }
       const body = await response.json();
       if (!response.ok) {
-        throw new Error('試算表連線失敗（' + response.status + '）：' + (body.error?.message || '未知錯誤'));
+        throw new Error('Google 連線失敗（' + response.status + '）：' + (body.error?.message || '未知錯誤'));
       }
       return body;
     }
@@ -219,19 +222,25 @@
       clearError();
       $('test-result').hidden = true;
       try {
-        const created = await sheetsFetch('', {
+        const created = await googleFetch(SHEETS_API, {
           method: 'POST',
           body: JSON.stringify({
             properties: { title: TEST_SPREADSHEET_TITLE },
             sheets: [{ properties: { title: TEST_SHEET_TITLE } }],
           }),
         });
-        await sheetsFetch(`/${created.spreadsheetId}/values/${sheetRange('A1')}:append?valueInputOption=USER_ENTERED`, {
+        const base = `${SHEETS_API}/${created.spreadsheetId}/values/`;
+        await googleFetch(`${base}${sheetRange('A1')}:append?valueInputOption=USER_ENTERED`, {
           method: 'POST',
           body: JSON.stringify({ values: [['時間', '內容'], [formatTimestamp(new Date()), '連線測試']] }),
         });
-        const read = await sheetsFetch(`/${created.spreadsheetId}/values/${sheetRange('A:B')}`);
-        showTestResult(created.spreadsheetUrl, read.values || []);
+        const read = await googleFetch(base + sheetRange('A:B'));
+        const query = new URLSearchParams({
+          q: `mimeType='${SPREADSHEET_MIME}' and trashed=false`,
+          fields: 'files(id,name)',
+        });
+        const found = await googleFetch(`${DRIVE_FILES_API}?${query}`);
+        showTestResult(created.spreadsheetUrl, read.values || [], found.files || []);
       } catch (err) {
         showError(err.message);
       } finally {
@@ -240,13 +249,17 @@
       }
     }
 
-    function showTestResult(url, rows) {
+    function showTestResult(url, rows, driveFiles) {
       const result = $('test-result');
       result.replaceChildren();
 
       const ok = document.createElement('div');
       ok.className = 'ok';
       ok.textContent = '✓ 建立、寫入、讀回 ' + rows.length + ' 列';
+
+      const found = document.createElement('div');
+      found.className = 'ok';
+      found.textContent = '✓ 雲端硬碟搜尋到 ' + driveFiles.length + ' 份本網站的試算表';
 
       const table = document.createElement('table');
       for (const row of rows) {
@@ -260,7 +273,7 @@
       link.rel = 'noopener';
       link.textContent = '開啟試算表 ↗';
 
-      result.append(ok, table, link);
+      result.append(ok, table, found, link);
       result.hidden = false;
     }
 
