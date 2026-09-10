@@ -307,6 +307,27 @@ async function getHistory(key) {
     }));
 }
 
+async function deleteRecord(key, id) {
+  const idColumn = String.fromCharCode('A'.charCodeAt(0) + SHEETS[key].headers.indexOf('ID'));
+  const { values = [] } = await googleFetch(
+    `${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, `${idColumn}:${idColumn}`)}?valueRenderOption=UNFORMATTED_VALUE`
+  );
+  // values[0] 是標題列，所以陣列索引剛好等於 deleteDimension 要的列索引（從 0 起算）
+  const rowIndex = values.findIndex((row, i) => i > 0 && String(row[0] ?? '') === String(id));
+  // 找不到就是已經不在了（例如在試算表裡手動刪掉），跟 GAS 版一樣當作刪除完成
+  if (rowIndex === -1) return;
+  await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [{
+        deleteDimension: {
+          range: { sheetId: state.spreadsheet.sheetIds[key], dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 },
+        },
+      }],
+    }),
+  });
+}
+
 function spreadsheetUrl(key) {
   return `${state.spreadsheet.url}#gid=${state.spreadsheet.sheetIds[key]}`;
 }

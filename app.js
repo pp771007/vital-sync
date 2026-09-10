@@ -238,17 +238,15 @@ createApp({
         if (res.isConfirmed) {
           deletingId.value = id;
           notify('⏳ 刪除中，請稍候…', 'loading', 0);
-          google.script.run
-            .withSuccessHandler(() => {
-              historyData.value = historyData.value.filter(i => i[0] !== id);
-              deletingId.value = null;
-              notify('🗑️ 刪除成功', 'info', 2500);
-            })
-            .withFailureHandler(() => {
-              deletingId.value = null;
-              notify('❌ 刪除失敗，請重試', 'error', 3000);
-            })
-            .deleteRecord(currentTab.value === 'bp' ? '血壓紀錄' : '體重紀錄', id);
+          deleteRecord(currentTab.value, id).then(() => {
+            historyData.value = historyData.value.filter(i => i[0] !== id);
+            deletingId.value = null;
+            notify('🗑️ 刪除成功', 'info', 2500);
+          }).catch((err) => {
+            console.error(err);
+            deletingId.value = null;
+            notify('❌ 刪除失敗，請重試', 'error', 3000);
+          });
         }
       });
     }
