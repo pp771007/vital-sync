@@ -57,14 +57,9 @@
     }
     #authorize { background: #0284c7; color: #fff; font-weight: 700; }
     #signout { background: none; color: #64748b; padding: 4px; font-size: 13px; }
-    #sheets-test { display: flex; flex-direction: column; gap: 12px; }
-    #test-sheets { background: none; color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
-    #test-sheets:disabled { opacity: 0.5; cursor: default; }
-    #test-result { font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
-    #test-result .ok { color: #34d399; font-weight: 700; }
-    #test-result table { width: 100%; border-collapse: collapse; color: #cbd5e1; }
-    #test-result td { padding: 4px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
-    #test-result a { color: #38bdf8; }
+    #spreadsheet-link { color: #34d399; text-decoration: none; font-weight: 700; }
+    #spreadsheet-retry { background: none; color: #f59e0b; border: 1px solid currentColor; padding: 3px 10px; font-size: 12px; border-radius: 999px; }
+    #spreadsheet-note { margin: -8px 0 0; text-align: center; }
     #error { margin: 0; color: #fca5a5; font-size: 13px; text-align: center; }
   </style>
 </head>
@@ -83,14 +78,17 @@
         </div>
       </div>
       <div class="row">
-        <span>試算表</span>
+        <span>存取權限</span>
         <span id="sheets-status" class="chip"></span>
       </div>
       <button id="authorize" type="button">允許存取試算表</button>
-      <div id="sheets-test" hidden>
-        <button id="test-sheets" type="button">測試試算表連線</button>
-        <div id="test-result" hidden></div>
+      <div id="spreadsheet-row" class="row" hidden>
+        <span>我的試算表</span>
+        <span id="spreadsheet-loading" class="muted">準備中…</span>
+        <a id="spreadsheet-link" target="_blank" rel="noopener" hidden>開啟 ↗</a>
+        <button id="spreadsheet-retry" type="button" hidden>重試</button>
       </div>
+      <p id="spreadsheet-note" class="muted" hidden>已在你的雲端硬碟建立「VITAL-SYNC」試算表</p>
       <button id="signout" type="button">登出</button>
     </section>
 
@@ -103,11 +101,27 @@
     const DATA_SCOPE = 'https://www.googleapis.com/auth/drive.file';
     const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
     const DRIVE_FILES_API = 'https://www.googleapis.com/drive/v3/files';
-    const SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
     const TIMEZONE = 'Asia/Taipei';
-    const TEST_SPREADSHEET_TITLE = 'VITAL-SYNC 連線測試';
-    const TEST_SHEET_TITLE = '測試';
-    const TEST_BUTTON_LABEL = '測試試算表連線';
+    const SHEET_LOCALE = 'zh_TW';
+
+    const SPREADSHEET_TITLE = 'VITAL-SYNC';
+    // 只認這個標記、不認檔名：使用者可能改名，而測試或其他本網站建的檔案也會出現在搜尋結果裡
+    const APP_MARKER = { key: 'vitalSync', value: 'main' };
+
+    // 欄位順序跟 GAS 版一樣，舊資料才能直接貼過來
+    const SHEETS = {
+      bp: { title: '血壓紀錄', headers: ['ID', '時間', '收縮壓', '舒張壓', '心跳', '備註'] },
+      weight: { title: '體重紀錄', headers: ['ID', '時間', '體重', '備註'] },
+    };
+
+    // 由高到低排：條件式格式先符合的先套用
+    const BP_LEVELS = [
+      { name: '二期', color: '#a855f7', sys: 160, dia: 100 },
+      { name: '一期', color: '#ef4444', sys: 140, dia: 90 },
+      { name: '前期', color: '#f59e0b', sys: 120, dia: 80 },
+    ];
+    const PULSE_FAST = { color: '#ef4444', above: 100 };
+    const ALERT_TEXT_COLOR = '#ffffff';
 
     const TOKEN_ERROR_MESSAGES = {
       popup_closed: '授權視窗被關掉了，再按一次「允許存取試算表」',
@@ -122,7 +136,7 @@
     };
 
     const $ = (id) => document.getElementById(id);
-    const state = { user: null, token: null, tokenExpiresAt: 0 };
+    const state = { user: null, token: null, tokenExpiresAt: 0, spreadsheet: null, spreadsheetStatus: 'idle' };
     let tokenClient = null;
     let expiryTimer = null;
 
@@ -179,6 +193,7 @@
       expiryTimer = setTimeout(render, state.tokenExpiresAt - Date.now());
       clearError();
       render();
+      if (state.spreadsheetStatus !== 'ready') ensureSpreadsheet();
     }
 
     async function googleFetch(url, options = {}) {
@@ -211,70 +226,110 @@
       return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
     }
 
-    function sheetRange(cells) {
-      return encodeURIComponent(`'${TEST_SHEET_TITLE}'!${cells}`);
+    const SPREADSHEET_FIELDS = 'spreadsheetId,spreadsheetUrl,sheets.properties(sheetId,title)';
+
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return { red: (n >> 16) / 255, green: ((n >> 8) & 0xff) / 255, blue: (n & 0xff) / 255 };
     }
 
-    async function testSheets() {
-      const button = $('test-sheets');
-      button.disabled = true;
-      button.textContent = '測試中…';
+    function colorRule(sheetId, header, headers, type, value, color) {
+      const column = headers.indexOf(header);
+      return {
+        ranges: [{ sheetId, startRowIndex: 1, startColumnIndex: column, endColumnIndex: column + 1 }],
+        booleanRule: {
+          condition: { type, values: [{ userEnteredValue: String(value) }] },
+          format: { backgroundColor: hexToRgb(color), textFormat: { foregroundColor: hexToRgb(ALERT_TEXT_COLOR) } },
+        },
+      };
+    }
+
+    function bpColorRules(sheetId) {
+      const { headers } = SHEETS.bp;
+      return [
+        ...BP_LEVELS.map((l) => colorRule(sheetId, '收縮壓', headers, 'NUMBER_GREATER_THAN_EQ', l.sys, l.color)),
+        ...BP_LEVELS.map((l) => colorRule(sheetId, '舒張壓', headers, 'NUMBER_GREATER_THAN_EQ', l.dia, l.color)),
+        colorRule(sheetId, '心跳', headers, 'NUMBER_GREATER', PULSE_FAST.above, PULSE_FAST.color),
+      ];
+    }
+
+    async function findSpreadsheet() {
+      const query = new URLSearchParams({
+        q: `appProperties has { key='${APP_MARKER.key}' and value='${APP_MARKER.value}' } and trashed=false`,
+        fields: 'files(id)',
+        // 兩台裝置同時第一次登入可能各建一份，固定用最早那份
+        orderBy: 'createdTime',
+        pageSize: '1',
+      });
+      const { files } = await googleFetch(`${DRIVE_FILES_API}?${query}`);
+      if (files.length === 0) return null;
+      return googleFetch(`${SHEETS_API}/${files[0].id}?fields=${SPREADSHEET_FIELDS}`);
+    }
+
+    async function createSpreadsheet() {
+      const sheets = Object.entries(SHEETS).map(([key, def], index) => {
+        const sheetId = index + 1;
+        return {
+          properties: { sheetId, title: def.title, gridProperties: { frozenRowCount: 1 } },
+          data: [{
+            startRow: 0,
+            startColumn: 0,
+            rowData: [{
+              values: def.headers.map((h) => ({
+                userEnteredValue: { stringValue: h },
+                userEnteredFormat: { textFormat: { bold: true } },
+              })),
+            }],
+          }],
+          conditionalFormats: key === 'bp' ? bpColorRules(sheetId) : [],
+        };
+      });
+      const created = await googleFetch(`${SHEETS_API}?fields=${SPREADSHEET_FIELDS}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: { title: SPREADSHEET_TITLE, locale: SHEET_LOCALE, timeZone: TIMEZONE },
+          sheets,
+        }),
+      });
+      // 標記失敗的話下次會再建一份，而不是拿到一份沒設定好的，所以先建檔再加標記
+      await googleFetch(`${DRIVE_FILES_API}/${created.spreadsheetId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ appProperties: { [APP_MARKER.key]: APP_MARKER.value } }),
+      });
+      return created;
+    }
+
+    function toSpreadsheetState(meta, created) {
+      const idsByTitle = Object.fromEntries(meta.sheets.map((s) => [s.properties.title, s.properties.sheetId]));
+      const sheetIds = {};
+      for (const [key, def] of Object.entries(SHEETS)) {
+        if (!(def.title in idsByTitle)) {
+          throw new Error(`試算表裡找不到「${def.title}」分頁，把它改回這個名字後按「重試」`);
+        }
+        sheetIds[key] = idsByTitle[def.title];
+      }
+      return { id: meta.spreadsheetId, url: meta.spreadsheetUrl, sheetIds, created };
+    }
+
+    async function ensureSpreadsheet() {
+      // 同時跑兩次會各自找不到、各建一份
+      if (state.spreadsheetStatus === 'loading') return;
+      const user = state.user;
+      state.spreadsheetStatus = 'loading';
       clearError();
-      $('test-result').hidden = true;
+      render();
       try {
-        const created = await googleFetch(SHEETS_API, {
-          method: 'POST',
-          body: JSON.stringify({
-            properties: { title: TEST_SPREADSHEET_TITLE },
-            sheets: [{ properties: { title: TEST_SHEET_TITLE } }],
-          }),
-        });
-        const base = `${SHEETS_API}/${created.spreadsheetId}/values/`;
-        await googleFetch(`${base}${sheetRange('A1')}:append?valueInputOption=USER_ENTERED`, {
-          method: 'POST',
-          body: JSON.stringify({ values: [['時間', '內容'], [formatTimestamp(new Date()), '連線測試']] }),
-        });
-        const read = await googleFetch(base + sheetRange('A:B'));
-        const query = new URLSearchParams({
-          q: `mimeType='${SPREADSHEET_MIME}' and trashed=false`,
-          fields: 'files(id,name)',
-        });
-        const found = await googleFetch(`${DRIVE_FILES_API}?${query}`);
-        showTestResult(created.spreadsheetUrl, read.values || [], found.files || []);
+        const found = await findSpreadsheet();
+        const spreadsheet = found ? toSpreadsheetState(found, false) : toSpreadsheetState(await createSpreadsheet(), true);
+        if (state.user !== user) return;
+        state.spreadsheet = spreadsheet;
+        state.spreadsheetStatus = 'ready';
       } catch (err) {
+        if (state.user !== user) return;
+        state.spreadsheetStatus = 'error';
         showError(err.message);
-      } finally {
-        button.disabled = false;
-        button.textContent = TEST_BUTTON_LABEL;
       }
-    }
-
-    function showTestResult(url, rows, driveFiles) {
-      const result = $('test-result');
-      result.replaceChildren();
-
-      const ok = document.createElement('div');
-      ok.className = 'ok';
-      ok.textContent = '✓ 建立、寫入、讀回 ' + rows.length + ' 列';
-
-      const found = document.createElement('div');
-      found.className = 'ok';
-      found.textContent = '✓ 雲端硬碟搜尋到 ' + driveFiles.length + ' 份本網站的試算表';
-
-      const table = document.createElement('table');
-      for (const row of rows) {
-        const tr = table.insertRow();
-        for (const cell of row) tr.insertCell().textContent = cell;
-      }
-
-      const link = document.createElement('a');
-      link.href = url;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.textContent = '開啟試算表 ↗';
-
-      result.append(ok, table, found, link);
-      result.hidden = false;
+      render();
     }
 
     function signOut() {
@@ -283,6 +338,8 @@
       state.user = null;
       state.token = null;
       state.tokenExpiresAt = 0;
+      state.spreadsheet = null;
+      state.spreadsheetStatus = 'idle';
       tokenClient = null;
       clearError();
       render();
@@ -313,7 +370,14 @@
       $('sheets-status').className = 'chip ' + view.cls;
       $('sheets-status').textContent = view.text();
       $('authorize').hidden = status === 'granted';
-      $('sheets-test').hidden = status !== 'granted';
+
+      const sheet = state.spreadsheetStatus;
+      $('spreadsheet-row').hidden = status !== 'granted';
+      $('spreadsheet-loading').hidden = sheet !== 'loading';
+      $('spreadsheet-link').hidden = sheet !== 'ready';
+      $('spreadsheet-retry').hidden = sheet !== 'error';
+      $('spreadsheet-link').href = state.spreadsheet?.url || '';
+      $('spreadsheet-note').hidden = !(sheet === 'ready' && state.spreadsheet.created);
     }
 
     function showError(message) {
@@ -327,7 +391,7 @@
 
     $('authorize').addEventListener('click', requestToken);
     $('signout').addEventListener('click', signOut);
-    $('test-sheets').addEventListener('click', testSheets);
+    $('spreadsheet-retry').addEventListener('click', ensureSpreadsheet);
   </script>
   <script src="https://accounts.google.com/gsi/client" async onload="onGisLoaded()" onerror="onGisFailed()"></script>
 </body>
