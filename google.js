@@ -248,6 +248,39 @@ async function ensureSpreadsheet() {
   render();
 }
 
+function sheetRange(key, cells) {
+  return encodeURIComponent(`'${SHEETS[key].title}'!${cells}`);
+}
+
+// USER_ENTERED 會把 = + - @ 開頭的文字當公式執行，前面加 ' 試算表就當成純文字
+const FORMULA_START = /^[=+\-@]/;
+
+function asPlainText(text) {
+  return FORMULA_START.test(text) ? "'" + text : text;
+}
+
+function toIntOrBlank(value) {
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) ? '' : n;
+}
+
+async function addRecord(key, data) {
+  const fields = key === 'bp'
+    ? { 收縮壓: toIntOrBlank(data.sys), 舒張壓: toIntOrBlank(data.dia), 心跳: toIntOrBlank(data.pulse) }
+    : { 體重: data.weight };
+  const record = { ID: crypto.randomUUID(), 時間: formatTimestamp(new Date()), ...fields, 備註: asPlainText(data.note) };
+  const row = SHEETS[key].headers.map((h) => record[h]);
+  // USER_ENTERED：時間字串才會被試算表認成日期
+  await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, 'A1')}:append?valueInputOption=USER_ENTERED`, {
+    method: 'POST',
+    body: JSON.stringify({ values: [row] }),
+  });
+}
+
+function spreadsheetUrl(key) {
+  return `${state.spreadsheet.url}#gid=${state.spreadsheet.sheetIds[key]}`;
+}
+
 function signOut() {
   google.accounts.id.disableAutoSelect();
   clearTimeout(expiryTimer);
@@ -272,6 +305,13 @@ function formatTime(ms) {
 
 function render() {
   const signedIn = state.user !== null;
+  const ready = signedIn && tokenStatus() === 'granted' && state.spreadsheetStatus === 'ready';
+  $('auth').hidden = ready;
+  $('app').hidden = !ready;
+  $('account-bar').hidden = !ready;
+  $('account-email').textContent = state.user?.email || '';
+  $('spreadsheet-note').hidden = !(ready && state.spreadsheet.created);
+
   $('signin-button').hidden = signedIn;
   $('account').hidden = !signedIn;
   if (!signedIn) return;
@@ -293,7 +333,6 @@ function render() {
   $('spreadsheet-link').hidden = sheet !== 'ready';
   $('spreadsheet-retry').hidden = sheet !== 'error';
   $('spreadsheet-link').href = state.spreadsheet?.url || '';
-  $('spreadsheet-note').hidden = !(sheet === 'ready' && state.spreadsheet.created);
 }
 
 function showError(message) {
@@ -307,4 +346,5 @@ function clearError() {
 
 $('authorize').addEventListener('click', requestToken);
 $('signout').addEventListener('click', signOut);
+$('bar-signout').addEventListener('click', signOut);
 $('spreadsheet-retry').addEventListener('click', ensureSpreadsheet);
