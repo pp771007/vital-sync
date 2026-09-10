@@ -114,7 +114,8 @@
       weight: { title: '體重紀錄', headers: ['ID', '時間', '體重', '備註'] },
     };
 
-    // 由高到低排：條件式格式先符合的先套用
+    // 由高到低排，每一級的上限就是上一級的門檻。試算表的上色規則因此互不重疊：
+    // Google 不照送出的順序決定哪條規則優先，重疊的話低等級的顏色會蓋掉高等級
     const BP_LEVELS = [
       { name: '二期', color: '#a855f7', sys: 160, dia: 100 },
       { name: '一期', color: '#ef4444', sys: 140, dia: 90 },
@@ -233,23 +234,36 @@
       return { red: (n >> 16) / 255, green: ((n >> 8) & 0xff) / 255, blue: (n & 0xff) / 255 };
     }
 
-    function colorRule(sheetId, header, headers, type, value, color) {
+    // test 收到第一筆資料的儲存格（例如 C2），回傳比較式；規則會套到整欄
+    function colorRule(sheetId, header, headers, test, color) {
       const column = headers.indexOf(header);
+      const cell = String.fromCharCode('A'.charCodeAt(0) + column) + '2';
       return {
         ranges: [{ sheetId, startRowIndex: 1, startColumnIndex: column, endColumnIndex: column + 1 }],
         booleanRule: {
-          condition: { type, values: [{ userEnteredValue: String(value) }] },
-          format: { backgroundColor: hexToRgb(color), textFormat: { foregroundColor: hexToRgb(ALERT_TEXT_COLOR) } },
+          // ISNUMBER：試算表把文字當成比任何數字都大，不擋的話格子裡打字也會被上色
+          condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(ISNUMBER(${cell}), ${test(cell)})` }] },
+          format: {
+            backgroundColorStyle: { rgbColor: hexToRgb(color) },
+            textFormat: { foregroundColorStyle: { rgbColor: hexToRgb(ALERT_TEXT_COLOR) } },
+          },
         },
       };
     }
 
+    function bpLevelRules(sheetId, header, key) {
+      return BP_LEVELS.map((level, i) => {
+        const upper = BP_LEVELS[i - 1]?.[key];
+        const test = (c) => (upper === undefined ? `${c}>=${level[key]}` : `${c}>=${level[key]}, ${c}<${upper}`);
+        return colorRule(sheetId, header, SHEETS.bp.headers, test, level.color);
+      });
+    }
+
     function bpColorRules(sheetId) {
-      const { headers } = SHEETS.bp;
       return [
-        ...BP_LEVELS.map((l) => colorRule(sheetId, '收縮壓', headers, 'NUMBER_GREATER_THAN_EQ', l.sys, l.color)),
-        ...BP_LEVELS.map((l) => colorRule(sheetId, '舒張壓', headers, 'NUMBER_GREATER_THAN_EQ', l.dia, l.color)),
-        colorRule(sheetId, '心跳', headers, 'NUMBER_GREATER', PULSE_FAST.above, PULSE_FAST.color),
+        ...bpLevelRules(sheetId, '收縮壓', 'sys'),
+        ...bpLevelRules(sheetId, '舒張壓', 'dia'),
+        colorRule(sheetId, '心跳', SHEETS.bp.headers, (c) => `${c}>${PULSE_FAST.above}`, PULSE_FAST.color),
       ];
     }
 
