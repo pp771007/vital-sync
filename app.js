@@ -211,7 +211,15 @@ createApp({
 
     // ── History ──
     function showHistory() {
-      notify('🚧 歷史紀錄下一步搬過來', 'error');
+      notify('🔍 讀取中...', 'loading', 0);
+      getHistory(currentTab.value).then(data => {
+        hideToast();
+        historyData.value = data;
+        modalVisible.value = true;
+      }).catch((err) => {
+        console.error(err);
+        notify('❌ 讀取失敗，請重試', 'error', 3000);
+      });
     }
 
     function deleteItem(id) {

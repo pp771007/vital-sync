@@ -277,6 +277,36 @@ async function addRecord(key, data) {
   });
 }
 
+const HISTORY_LIMIT = 20;
+// 試算表的日期數值以 1899-12-30 為第 0 天；1970-01-01 是第 25569 天
+const SERIAL_UNIX_EPOCH = 25569;
+const MS_PER_DAY = 86400000;
+
+// 日期數值就是試算表時區（台灣）的牆上時間，當成 UTC 取出年月日時分，才不會再被瀏覽器時區位移一次
+function formatSerialDateTime(serial) {
+  const ms = Math.round(((serial - SERIAL_UNIX_EPOCH) * MS_PER_DAY) / 1000) * 1000;
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+async function getHistory(key) {
+  const { headers } = SHEETS[key];
+  const lastColumn = String.fromCharCode('A'.charCodeAt(0) + headers.length - 1);
+  const timeIndex = headers.indexOf('時間');
+  // 讀日期數值而不是顯示文字：使用者在試算表改了時間欄的顯示格式，網站上的時間也不會跟著變
+  const query = 'valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER';
+  const { values = [] } = await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, `A2:${lastColumn}`)}?${query}`);
+  return values
+    .filter((row) => row.some((cell) => cell !== ''))
+    .reverse()
+    .slice(0, HISTORY_LIMIT)
+    .map((row) => headers.map((_, i) => {
+      const cell = row[i] ?? '';
+      return i === timeIndex && typeof cell === 'number' ? formatSerialDateTime(cell) : String(cell);
+    }));
+}
+
 function spreadsheetUrl(key) {
   return `${state.spreadsheet.url}#gid=${state.spreadsheet.sheetIds[key]}`;
 }
