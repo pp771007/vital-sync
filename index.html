@@ -103,6 +103,10 @@
       gap: 20px;
     }
     #auth h1 { margin: 0; font-size: 22px; letter-spacing: 0.2em; color: #38bdf8; font-weight: 700; }
+    #auth .tagline { margin: -12px 0 0; text-align: center; }
+    #auth .legal { display: flex; gap: 16px; font-size: 12px; }
+    #auth .legal a { color: #64748b; text-decoration: none; }
+    #auth .legal a:hover { color: #cbd5e1; }
     #account { width: 100%; display: flex; flex-direction: column; gap: 16px; }
     #auth .who { display: flex; align-items: center; gap: 12px; }
     #auth .who img { width: 44px; height: 44px; border-radius: 50%; }
@@ -120,6 +124,7 @@
 <body class="p-4 pb-24">
   <main id="auth">
     <h1>VITAL-SYNC</h1>
+    <p class="tagline muted">記錄血壓與體重，存進你自己的 Google 試算表</p>
 
     <div id="signin-button"></div>
 
@@ -137,6 +142,9 @@
     </section>
 
     <p id="error" role="alert" hidden></p>
+
+    <!-- Google OAuth 同意畫面審核要求首頁看得到隱私權政策 -->
+    <nav class="legal"><a href="./privacy.html">隱私權政策</a><a href="./terms.html">服務條款</a></nav>
   </main>
 
   <div id="account-bar" class="max-w-md mx-auto flex justify-end items-center gap-2 text-[11px] text-slate-500 relative z-10" hidden>

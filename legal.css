@@ -1,0 +1,22 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  padding: 32px 16px 64px;
+  background: #020617;
+  color: #cbd5e1;
+  font-family: 'Noto Sans TC', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.8;
+}
+main { max-width: 720px; margin: 0 auto; }
+.brand { display: inline-flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 700; letter-spacing: 0.15em; text-decoration: none; }
+.brand img { width: 24px; height: 24px; }
+h1 { margin: 24px 0 4px; color: #f8fafc; font-size: 26px; }
+h2 { margin: 32px 0 8px; color: #f8fafc; font-size: 18px; }
+.updated { margin: 0; color: #64748b; font-size: 13px; }
+a { color: #38bdf8; }
+ul { padding-left: 1.4em; }
+li { margin: 4px 0; }
+strong { color: #f8fafc; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); font-size: 13px; color: #64748b; }
