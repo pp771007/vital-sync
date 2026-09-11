@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VITAL-SYNC</title>
+  <meta name="theme-color" content="#020617">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <!-- PNG 標 sizes，支援 SVG 的瀏覽器才會優先選下面那個 SVG -->
+  <link rel="icon" href="./icons/icon-32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <script src="./vendor/sweetalert2-11.26.25.all.min.js"></script>
   <script src="./vendor/vue-3.5.42.global.prod.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Noto+Sans+TC:wght@300;500;700&display=swap" rel="stylesheet">
@@ -365,5 +371,8 @@
   <script src="./google.js"></script>
   <script src="./app.js"></script>
   <script src="https://accounts.google.com/gsi/client" async onload="onGisLoaded()" onerror="onGisFailed()"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+  </script>
 </body>
 </html>
