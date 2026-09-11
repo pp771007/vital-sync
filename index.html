@@ -79,10 +79,14 @@
       z-index: 40;
     }
 
+    /* 還沒進到輸入畫面時整頁只剩登入卡片，把它放在畫面正中間；pb-24 是留給底部列的，這時不需要 */
+    body:has(> #auth:not([hidden])) { display: grid; place-items: center; min-height: 100dvh; padding-bottom: 1rem; }
+
     /* 登入卡片：樣式只套在卡片內，不影響上面原本的畫面 */
     #auth {
+      width: 100%;
       max-width: 360px;
-      margin: 32px auto 0;
+      margin: 0 auto;
       padding: 28px 24px;
       border-radius: 24px;
       background: rgba(30, 41, 59, 0.7);
