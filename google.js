@@ -182,18 +182,6 @@ async function googleFetch(url, options = {}) {
   return body;
 }
 
-// 跟 GAS 版 addRecord 寫進去的格式一樣，試算表才會把它認成日期
-function formatTimestamp(date) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: TIMEZONE,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(date).map((p) => [p.type, p.value])
-  );
-  return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-}
 
 const SPREADSHEET_FIELDS = 'spreadsheetId,spreadsheetUrl,sheets.properties(sheetId,title)';
 
@@ -329,11 +317,28 @@ function sheetRange(key, cells) {
   return encodeURIComponent(`'${SHEETS[key].title}'!${cells}`);
 }
 
-// USER_ENTERED 會把 = + - @ 開頭的文字當公式執行，前面加 ' 試算表就當成純文字
-const FORMULA_START = /^[=+\-@]/;
+// 試算表的日期數值以 1899-12-30 為第 0 天；1970-01-01 是第 25569 天
+const SERIAL_UNIX_EPOCH = 25569;
+const MS_PER_DAY = 86400000;
+const TIMESTAMP_FORMAT = { type: 'DATE_TIME', pattern: 'yyyy/mm/dd hh:mm:ss' };
 
-function asPlainText(text) {
-  return FORMULA_START.test(text) ? "'" + text : text;
+// 日期數值是試算表時區（台灣）的牆上時間，不是 UTC
+function toSerialDateTime(date) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: TIMEZONE,
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+      hourCycle: 'h23',
+    }).formatToParts(date).map((part) => [part.type, Number(part.value)])
+  );
+  const wallClockMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return wallClockMs / MS_PER_DAY + SERIAL_UNIX_EPOCH;
+}
+
+function toNumberOrBlank(value) {
+  const n = Number.parseFloat(value);
+  return Number.isNaN(n) ? '' : n;
 }
 
 function toIntOrBlank(value) {
@@ -341,24 +346,37 @@ function toIntOrBlank(value) {
   return Number.isNaN(n) ? '' : n;
 }
 
+// stringValue 一律當純文字存，= 開頭的備註不會被當成公式執行
+function toCell(value) {
+  if (value === '' || value === undefined) return {};
+  return { userEnteredValue: typeof value === 'number' ? { numberValue: value } : { stringValue: value } };
+}
+
 async function addRecord(key, data) {
   const fields = key === 'bp'
     ? { 收縮壓: toIntOrBlank(data.sys), 舒張壓: toIntOrBlank(data.dia), 心跳: toIntOrBlank(data.pulse) }
-    : { 體重: data.weight };
-  const record = { ID: crypto.randomUUID(), 時間: formatTimestamp(new Date()), ...fields, 備註: asPlainText(data.note) };
-  const row = SHEETS[key].headers.map((h) => record[h]);
+    : { 體重: toNumberOrBlank(data.weight) };
+  const record = { ID: crypto.randomUUID(), ...fields, 備註: data.note };
+  const timeCell = { userEnteredValue: { numberValue: toSerialDateTime(new Date()) }, userEnteredFormat: { numberFormat: TIMESTAMP_FORMAT } };
+  const values = SHEETS[key].headers.map((h) => (h === '時間' ? timeCell : toCell(record[h])));
   await prepare();
-  // USER_ENTERED：時間字串才會被試算表認成日期
-  await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}/values/${sheetRange(key, 'A1')}:append?valueInputOption=USER_ENTERED`, {
+  // 不用 values.append：它從指定範圍「猜」表格在哪，猜錯會寫到標題列。
+  // appendCells 跟 GAS 的 appendRow 一樣，接在整個分頁最後一列有資料的下面
+  await googleFetch(`${SHEETS_API}/${state.spreadsheet.id}:batchUpdate`, {
     method: 'POST',
-    body: JSON.stringify({ values: [row] }),
+    body: JSON.stringify({
+      requests: [{
+        appendCells: {
+          sheetId: state.spreadsheet.sheetIds[key],
+          rows: [{ values }],
+          fields: 'userEnteredValue,userEnteredFormat.numberFormat',
+        },
+      }],
+    }),
   });
 }
 
 const HISTORY_LIMIT = 20;
-// 試算表的日期數值以 1899-12-30 為第 0 天；1970-01-01 是第 25569 天
-const SERIAL_UNIX_EPOCH = 25569;
-const MS_PER_DAY = 86400000;
 
 // 日期數值就是試算表時區（台灣）的牆上時間，當成 UTC 取出年月日時分，才不會再被瀏覽器時區位移一次
 function formatSerialDateTime(serial) {
