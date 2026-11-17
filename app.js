@@ -17,6 +17,14 @@ createApp({
     let touchStartX = 0;
     let toastTimer = null;
 
+    // GitHub Pages 每次部署都把所有檔案的 Last-Modified 設成部署時間，而從離線快取打開時頁面也帶著當時的標頭，
+    // 所以這就是手機上實際在跑的那一版的部署時間，改版時不用手動改號碼
+    const appVersion = (() => {
+      const d = new Date(document.lastModified);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    })();
+
     // Weight display helper
     const weightDisplay = computed(() => {
       const i = weight.value.intPart;
@@ -311,7 +319,7 @@ createApp({
     }
 
     return {
-      currentTab, bp, weight, weightDisplay,
+      currentTab, bp, weight, weightDisplay, appVersion,
       pendingIds, syncPending, toastMsg, toastVisible, toastType,
       modalVisible, historyData, bpNoteOpen, weightNoteOpen, bpInfoOpen, deletingId,
       sysInputClass, diaInputClass, pulseInputClass,
