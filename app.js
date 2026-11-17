@@ -4,8 +4,7 @@ createApp({
     const currentTab = ref('bp');
     const bp = ref({ sys: '', dia: '', pulse: '', note: '' });
     const weight = ref({ intPart: '', decPart: '', note: '' });
-    const bpLoading = ref(false);
-    const weightLoading = ref(false);
+    const pendingIds = ref(new Set());
     const toastMsg = ref('');
     const toastVisible = ref(false);
     const toastType = ref('info'); // 'info' | 'error' | 'loading'
@@ -168,22 +167,40 @@ createApp({
       document.getElementById('weight-dec')?.focus();
     }
 
+    // ── Upload ──
+    // 紀錄已經先存在手機上，這裡只負責送出；送不出去也不會不見，帳號列的待上傳鈕會留著
+    function uploadAfterSave(successMsg) {
+      notify('⏳ 上傳中，請稍候…', 'loading', 0);
+      flushOutbox().then(() => {
+        notify(successMsg, 'info', 2500);
+      }).catch((err) => {
+        if (err.isOffline) return notify('📱 已存在手機，待上傳', 'info', 3000);
+        notifyFailure(err, '❌ 上傳失敗，已存在手機');
+      });
+    }
+
+    function syncPending() {
+      notify('⏳ 上傳中，請稍候…', 'loading', 0);
+      flushOutbox().then(() => {
+        notify('✅ 已全部上傳', 'info', 2500);
+      }).catch((err) => {
+        console.error(err);
+        notify('⚠️ ' + (err.isOffline ? '沒有網路，連上後再按一次' : err.message), 'error', 3000);
+      });
+    }
+
+    function refreshPending() {
+      pendingIds.value = new Set(pendingRecords().map((r) => r.id));
+    }
+
     // ── Submit BP ──
     function submitBP() {
       if (!bp.value.sys || !bp.value.dia) return notify('⚠️ 請填寫血壓數值', 'error');
       if (parseInt(bp.value.sys) <= parseInt(bp.value.dia)) return notify('⚠️ 收縮壓應高於舒張壓', 'error');
-      bpLoading.value = true;
-      notify('⏳ 上傳中，請稍候…', 'loading', 0);
-      addRecord('bp', bp.value).then(() => {
-        bpLoading.value = false;
-        hideToast();
-        bp.value = { sys: '', dia: '', pulse: '', note: '' };
-        bpNoteOpen.value = false;
-        notify('✅ 血壓紀錄已儲存', 'info', 2500);
-      }).catch((err) => {
-        bpLoading.value = false;
-        notifyFailure(err, '❌ 上傳失敗，請重試');
-      });
+      queueRecord('bp', bp.value);
+      bp.value = { sys: '', dia: '', pulse: '', note: '' };
+      bpNoteOpen.value = false;
+      uploadAfterSave('✅ 血壓紀錄已儲存');
     }
 
     // ── Submit Weight ──
@@ -191,20 +208,12 @@ createApp({
       if (!weight.value.intPart) return notify('⚠️ 請輸入體重', 'error');
       const val = parseFloat(`${weight.value.intPart}.${weight.value.decPart || 0}`);
       if (isNaN(val) || val < 10) return notify('⚠️ 請輸入有效體重', 'error');
-      weightLoading.value = true;
-      notify('⏳ 上傳中，請稍候…', 'loading', 0);
       const decLen = (weight.value.decPart || '').length;
       const displayVal = val.toFixed(decLen === 2 ? 2 : 1);
-      addRecord('weight', { weight: displayVal, note: weight.value.note }).then(() => {
-        weightLoading.value = false;
-        hideToast();
-        weight.value = { intPart: '', decPart: '', note: '' };
-        weightNoteOpen.value = false;
-        notify('✅ 體重紀錄已儲存', 'info', 2500);
-      }).catch((err) => {
-        weightLoading.value = false;
-        notifyFailure(err, '❌ 上傳失敗，請重試');
-      });
+      queueRecord('weight', { weight: displayVal, note: weight.value.note });
+      weight.value = { intPart: '', decPart: '', note: '' };
+      weightNoteOpen.value = false;
+      uploadAfterSave('✅ 體重紀錄已儲存');
     }
 
     function openSpreadsheet() {
@@ -213,13 +222,18 @@ createApp({
 
     // ── History ──
     function showHistory() {
+      const key = currentTab.value;
       notify('🔍 讀取中...', 'loading', 0);
-      getHistory(currentTab.value).then(data => {
+      getHistory(key).then(data => {
         hideToast();
         historyData.value = data;
         modalVisible.value = true;
       }).catch((err) => {
-        notifyFailure(err, '❌ 讀取失敗，請重試');
+        const pending = pendingHistory(key);
+        if (!err.isOffline || pending.length === 0) return notifyFailure(err, '❌ 讀取失敗，請重試');
+        historyData.value = pending;
+        modalVisible.value = true;
+        notify('📱 沒有網路，只顯示手機上的紀錄', 'info', 3000);
       });
     }
 
@@ -245,7 +259,7 @@ createApp({
             notify('🗑️ 刪除成功', 'info', 2500);
           }).catch((err) => {
             deletingId.value = null;
-            notifyFailure(err, '❌ 刪除失敗，請重試');
+            notifyFailure(err, err.isOffline ? '⚠️ 沒有網路，連上後再刪' : '❌ 刪除失敗，請重試');
           });
         }
       });
@@ -269,12 +283,14 @@ createApp({
     Vue.onMounted(() => {
       document.addEventListener('touchstart', onTouchStart, { passive: true });
       document.addEventListener('touchend', onTouchEnd, { passive: true });
-
+      window.addEventListener('outboxchange', refreshPending);
+      refreshPending();
     });
 
     Vue.onUnmounted(() => {
       document.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('outboxchange', refreshPending);
     });
 
     // ── History colors ──
@@ -296,7 +312,7 @@ createApp({
 
     return {
       currentTab, bp, weight, weightDisplay,
-      bpLoading, weightLoading, toastMsg, toastVisible, toastType,
+      pendingIds, syncPending, toastMsg, toastVisible, toastType,
       modalVisible, historyData, bpNoteOpen, weightNoteOpen, bpInfoOpen, deletingId,
       sysInputClass, diaInputClass, pulseInputClass,
       sysStatus, diaStatus, pulseStatus,

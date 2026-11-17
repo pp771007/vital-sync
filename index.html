@@ -156,6 +156,13 @@
 
 <div id="app" hidden>
   <div class="max-w-md mx-auto pt-4 relative z-10">
+    <!-- 放在帳號列左邊的空位：標題旁邊在窄螢幕會跟標題疊在一起 -->
+    <teleport to="#account-bar">
+      <button v-if="pendingIds.size > 0" @click="syncPending" class="order-first mr-auto flex items-center gap-1 px-2.5 py-1 rounded-full border border-amber-400/50 text-amber-400 text-[11px] font-bold">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+        {{ pendingIds.size }} 待上傳
+      </button>
+    </teleport>
     <header class="mb-6 text-center">
       <h1 class="text-2xl font-bold tracking-widest font-tech" :class="currentTab === 'bp' ? 'text-sky-400' : 'text-emerald-400'">VITAL-SYNC</h1>
     </header>
@@ -211,17 +218,7 @@
                 </div>
               </div>
             </div>
-            <button id="bp-submit" @click="submitBP" :disabled="bpLoading" class="w-full bg-sky-600 py-4 rounded-xl font-bold text-white shadow-lg active:scale-95 transition-all flex items-center justify-center gap-3" :class="{ 'opacity-70': bpLoading }">
-              <template v-if="bpLoading">
-                <span class="text-sm">處理中</span>
-                <span class="flex gap-1">
-                  <span class="processing-dot"></span>
-                  <span class="processing-dot"></span>
-                  <span class="processing-dot"></span>
-                </span>
-              </template>
-              <template v-else>儲存並上傳</template>
-            </button>
+            <button id="bp-submit" @click="submitBP" class="w-full bg-sky-600 py-4 rounded-xl font-bold text-white shadow-lg active:scale-95 transition-all">儲存</button>
           </div>
         </div>
 
@@ -254,17 +251,7 @@
                 </div>
               </div>
             </div>
-            <button id="weight-submit" @click="submitWeight" :disabled="weightLoading" class="w-full bg-emerald-600 py-4 rounded-xl font-bold text-white active:scale-95 transition-all flex items-center justify-center gap-3" :class="{ 'opacity-70': weightLoading }">
-              <template v-if="weightLoading">
-                <span class="text-sm">處理中</span>
-                <span class="flex gap-1">
-                  <span class="processing-dot" style="background:#34d399"></span>
-                  <span class="processing-dot" style="background:#34d399"></span>
-                  <span class="processing-dot" style="background:#34d399"></span>
-                </span>
-              </template>
-              <template v-else>儲存並上傳</template>
-            </button>
+            <button id="weight-submit" @click="submitWeight" class="w-full bg-emerald-600 py-4 rounded-xl font-bold text-white active:scale-95 transition-all">儲存</button>
           </div>
         </div>
 
@@ -289,7 +276,7 @@
         <div v-if="historyData.length === 0" class="text-center text-slate-600 mt-20 italic font-tech">尚無紀錄資料</div>
         <div v-for="row in historyData" :key="row[0]" class="glass p-5 rounded-2xl flex justify-between items-center border-l-4" :class="currentTab === 'bp' ? getBPBorderClass(row[2], row[3]) : 'border-emerald-500'">
           <div class="flex-1">
-            <div class="text-[10px] text-slate-500 font-tech">{{ row[1] }}</div>
+            <div class="text-[10px] text-slate-500 font-tech">{{ row[1] }}<span v-if="pendingIds.has(row[0])" class="ml-2 text-amber-400 font-bold">待上傳</span></div>
             <div v-if="currentTab === 'bp'" class="text-xl font-bold font-tech">
               <span :class="getSysColorClass(row[2])">{{ row[2] }}</span><span class="text-slate-700 mx-1">/</span><span :class="getDiaColorClass(row[3])">{{ row[3] }}</span>
               <span class="ml-3 text-sm text-pink-400">❤️ {{ row[4] }}</span>
@@ -378,7 +365,6 @@
 
   <script src="./google.js"></script>
   <script src="./app.js"></script>
-  <script src="https://accounts.google.com/gsi/client" async onload="onGisLoaded()" onerror="onGisFailed()"></script>
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   </script>
