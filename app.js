@@ -176,14 +176,18 @@ createApp({
     }
 
     // ── Upload ──
-    // 紀錄已經先存在手機上，這裡只負責送出；送不出去也不會不見，帳號列的待上傳鈕會留著
+    // 紀錄已經先存在手機上，這裡只負責送出；送不出去也不會不見，帳號列的待上傳鈕會留著。
+    // 失敗訊息不能叫人「再按一次」：這裡的「再按」是重新儲存，同一筆會變兩筆
+    const SAVED_PENDING_MSG = '📱 已存在手機，待上傳';
     function uploadAfterSave(successMsg) {
-      notify('⏳ 上傳中，請稍候…', 'loading', 0);
+      if (!autoUploadAllowed()) return notify(SAVED_PENDING_MSG, 'info', 3000);
+      notify('📱 已存在手機，上傳中…', 'loading', 0);
       flushOutbox().then(() => {
         notify(successMsg, 'info', 2500);
       }).catch((err) => {
-        if (err.isOffline) return notify('📱 已存在手機，待上傳', 'info', 3000);
-        notifyFailure(err, '❌ 上傳失敗，已存在手機');
+        if (err.isOffline || err.isDismissed) return notify(SAVED_PENDING_MSG, 'info', 3000);
+        console.error(err);
+        notify(err.isAuth ? '⚠️ 已存在手機，點「待上傳」重試' : '❌ 上傳失敗，已存在手機', 'error', 3000);
       });
     }
 

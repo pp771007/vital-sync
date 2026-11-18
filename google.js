@@ -54,6 +54,9 @@ let pendingToken = null;
 let pendingSpreadsheet = null;
 let pendingFlush = null;
 let gisLoading = false;
+// 使用者自己關掉授權視窗 = 現在不想等（多半是網路慢）。這段期間按儲存就不再自動跳視窗，
+// 紀錄留在手機上，要上傳時點「待上傳」；離開 App 再回來就恢復自動（見 visibilitychange）
+let tokenPromptDismissed = false;
 
 // 不寫成 HTML 裡的 <script>：離線打開時那個載入失敗就不會再試，網路恢復後也拿不到新的授權
 function loadGis() {
@@ -136,8 +139,17 @@ function initTokenClient() {
     scope: DATA_SCOPE,
     login_hint: state.user.email,
     callback: onTokenResponse,
-    error_callback: (err) => tokenRequest?.reject(authError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR)),
+    error_callback: (err) => {
+      const dismissed = err.type === 'popup_closed';
+      if (dismissed) tokenPromptDismissed = true;
+      tokenRequest?.reject(Object.assign(authError(TOKEN_ERROR_MESSAGES[err.type] || DEFAULT_TOKEN_ERROR), { isDismissed: dismissed }));
+    },
   });
+}
+
+// 按儲存後要不要自動上傳：權杖有效就直接送；過期的話要跳授權視窗，使用者剛關掉過就不跳
+function autoUploadAllowed() {
+  return tokenStatus() === 'granted' || !tokenPromptDismissed;
 }
 
 // isAuth：這類錯誤要把原因直接告訴使用者（例如彈窗被擋），其他錯誤只說「失敗，請重試」
@@ -678,6 +690,7 @@ $('bar-signout').addEventListener('click', confirmSignOut);
 window.addEventListener('online', () => { loadGis(); autoFlush(); });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') autoFlush();
+  else tokenPromptDismissed = false;
 });
 
 restoreSession();
