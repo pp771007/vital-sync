@@ -173,7 +173,8 @@ function onCredential({ credential }) {
 // 瀏覽器只准「使用者剛點擊的當下」開彈窗，所以這支一定要在按鈕的點擊處理裡、第一個 await 之前被呼叫
 function ensureToken() {
   if (tokenStatus() === 'granted') return Promise.resolve();
-  if (!tokenClient) return Promise.reject(offlineError());
+  // 確定沒網路（飛航模式）時彈窗只會是一整頁「無法連上網路」，而手機上那個視窗不一定有地方關
+  if (!tokenClient || !navigator.onLine) return Promise.reject(offlineError());
   if (!pendingToken) {
     pendingToken = new Promise((resolve, reject) => {
       tokenRequest = { resolve, reject };
